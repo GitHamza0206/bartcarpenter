@@ -131,8 +131,7 @@ def flatten_dict(d, sep='_'):
 def main():
     #load_dotenv()
     #st.set_page_config(page_title = "Receipt Invoice OCR", page_icon = ":camera")
-    
-    st.write(css, unsafe_allow_html = True)
+
     
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
