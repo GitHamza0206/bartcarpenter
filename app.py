@@ -2,15 +2,13 @@ import tempfile
 from openai import OpenAI
 import os
 import streamlit as st
-from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import FAISS
-from langchain.embeddings import HuggingFaceInstructEmbeddings
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
-from langchain.llms import GPT4All, HuggingFaceHub
-from html_templates import css, bot_template, user_template
+
+
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 import base64
@@ -25,7 +23,7 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 
 from PIL import Image
 
-os.environ["OPENAI_API_KEY"] ="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"
+os.environ["OPENAI_API_KEY"] = st.secrets['OPENAI_API_KEY']
 
 client = OpenAI()
 
@@ -82,7 +80,7 @@ prompt = """
 
 def gpt_response(base64_image,prompt=prompt):
     
-    api_key= os.getenv('OPENAI_API_KEY')
+    api_key= st.secrets['OPENAI_API_KEY']
     
     headers = {
         "Content-Type": "application/json",
@@ -131,8 +129,8 @@ def flatten_dict(d, sep='_'):
     return flat_dict
 
 def main():
-    load_dotenv()
-    st.set_page_config(page_title = "Receipt Invoice OCR", page_icon = ":camera")
+    #load_dotenv()
+    #st.set_page_config(page_title = "Receipt Invoice OCR", page_icon = ":camera")
     
     st.write(css, unsafe_allow_html = True)
     
