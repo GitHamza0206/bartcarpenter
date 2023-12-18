@@ -112,9 +112,6 @@ def gpt_response(base64_image,prompt=prompt):
     response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
     return response.json()
 
-
-
-
 def get_base64_of_file(file):
     string_data = file.getvalue() 
     base64_encoded_data = base64.b64encode(string_data)
@@ -139,12 +136,13 @@ def main():
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = None
     
+    if "csvans" not in st.session_state:
+        st.session_state.csvans = None
+
     st.header("Receipt Invoice OCR :camera")
     if "answer" not in st.session_state:
         st.session_state.answer=None
     ct = st.container()
-
-
 
     col1,col2=ct.columns(2)
     with st.sidebar:
@@ -168,7 +166,20 @@ def main():
                         ct.write(json_output)
                         st.session_state.answer = json_output
                     except Exception:
+                        ct.write(response)
                         ct.error('Error occured...')
+                    
+                    csvresp = gpt_response(b64_image,prompt="write me the Date,Amount,Check Number,Description if you find them (in JSON format) in this exactly this format {invoices : ['Date': '' , 'Amount':'','Check Number' :'', 'Description':'']}  !VERY IMPORTANT : DO NOT WRITE ANY TEXT RATEHR THAN THE JSON FORMAT! ")
+                
+                    try:
+                        csvans = csvresp['choices'][0]['message']['content']
+
+                        st.session_state.csvans = csvans
+                        
+                    except Exception as e  :
+                        print('error with csv ')
+                        ct.error(csvresp)
+                        ct.write(e)
 
                 elif file_extension in ['pdf']:
                     try: 
@@ -180,20 +191,69 @@ def main():
                         response_classification = conv({"question": "Is this document an invoice or receipt ? answer invoice or receipt"})
                         classification = response_classification['answer']
                         ct.write(classification)
+
+                        conv = conversation_chain(vector_store)
+                        csvresp=  conv({"question": "write me the Date,Amount,Check Number,Description if you find them (in JSON format) in this format '''{invoices : ['Date': '' , 'Amount':'','Check Number' :'', 'Description':'']}'''"})                        
+                        try:
+                            csvans = json.loads(csvresp["answer"])
+                            st.session_state.csvans = csvans
+                            ct.write(csvans)
+
+                        except Exception as e  :
+                            print('error with OCR')
+                            ct.write(csvresp["answer"])
+
+
                         conv = conversation_chain(vector_store)
                         resp = conv({"question": "write me all pertinent information (in JSON format). Focus on identifying key facts, legal arguments, relevant citations, and any dates or names of individuals or entities involved. The document pertains to [specific area of law], so please apply relevant legal principles and precedents in your analysis. Present the extracted information in a structured format, summarizing each section and highlighting critical legal points. If there are any ambiguities or uncertain aspects in the document, please flag them for. I want only the JSON format, no Summary"})                        
-                        ans = json.loads(resp["answer"])
-                        st.session_state.answer = ans
-                        ct.write(ans)
+                        try:
+                            ans = json.loads(resp["answer"])
+                            st.session_state.answer = ans
+                            ct.write(ans)
+                        except Exception as e  :
+                            ct.write(resp["answer"])
+
                     except Exception as e :
                         st.write(e)
-
+                        ct.write(csvresp)
+                        ct.write(resp)
                         ct.error('Error occured...')
 
+    @st.cache_data
+    def convert_df(df):
+        return df.to_csv(index=False).encode()
+
     dfc = st.container()
-    if st.session_state.answer:
-        df = pd.DataFrame([st.session_state.answer])
+    if st.session_state.csvans:
+        
+        try:
+            result = st.session_state.csvans['invoices']
+        except :
+            result = json.loads(st.session_state.csvans[7:-3])['invoices']
+        df = pd.DataFrame(result)
         dfc.dataframe(df)
+        save = ct.button('save')
+        if save: 
+            with st.spinner("Processing"):
+                excel_file_path = "Bank Upload CSV QBO.csv"
+                exisiting_df = pd.read_csv(excel_file_path)
+                new_df = pd.concat([exisiting_df, df], ignore_index=True)
+                dfc.dataframe(new_df)
+                csv = convert_df(new_df)
+                ct.success('File saved ')
+                ct.download_button(
+                    label="Download data as CSV",
+                    data=csv,
+                    file_name=excel_file_path,
+                    mime='text/csv',
+                )
+
+
+
+
+
+
+    
 
         
 if __name__ == '__main__':
