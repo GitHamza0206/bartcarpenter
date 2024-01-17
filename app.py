@@ -1,31 +1,54 @@
-import tempfile
 from openai import OpenAI
 import os
 import streamlit as st
 from PyPDF2 import PdfReader
+
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
-
+import requests
+from io import StringIO
 
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 import base64
 import requests 
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
+
 import json 
 import pandas as pd 
+from langchain import PromptTemplate
 
 from langchain.llms import OpenAI
 from langchain.embeddings.openai import OpenAIEmbeddings
-
+from langchain_experimental.agents import create_csv_agent
 from PIL import Image
+import boto3
+import pandas as pd
+from io import StringIO
 
 os.environ["OPENAI_API_KEY"] = st.secrets['OPENAI_API_KEY']
 
+session = boto3.Session(
+    aws_access_key_id='AKIATCPYKRBDNS5OE7XH',
+    aws_secret_access_key='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',
+    region_name='us-east-1'
+)
+
+bucket_name = 'receiptscanners3'
+file_name = 'Bank Upload CSV QBO (2).csv'
+s3 = session.client('s3')
+
 client = OpenAI()
+
+def download_file_from_s3(bucket, key):
+    response = s3.get_object(Bucket=bucket, Key=key)
+    return response['Body'].read().decode('utf-8')
+
+# Function to upload file to S3
+def upload_file_to_s3(bucket, key, data):
+    s3.put_object(Bucket=bucket, Key=key, Body=data)
+
 
 def get_pdf_text(pdf_docs):
     text = ""
@@ -62,6 +85,26 @@ def conversation_chain(vectorstore):
         memory = memory
     )
     return conversation_chain
+
+def quickbooks_repsonse(json_answer):
+    csv_file_path="Updated_Quickbooks_chart_of_accounts.csv"
+    agent = create_csv_agent(OpenAI(temperature=0), csv_file_path, verbose=True,agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION)
+    user_question="""
+    instructions: produce a dataframe based on informations in JSON format of invoices and receipts by indentifying the quickbooks
+    account code. the columns of the dataframe are Date,Amount,Check Number,Description.
+
+    context: you are OCR helper, you have in your knowledge a csv file that contains the account code number corresponding to quickbooks
+    you will be given a json corresponding to the data of invoices and receipts. You should help us extract informations
+
+    question: what is the quickbook account corresponding to this json {json_answer}?  
+
+    Answer : 
+    """
+    prompt = PromptTemplate.from_template(template=user_question)
+    prompt_formatted_str=prompt.format(
+        json_answer=json_answer)
+    agent.run(user_question)
+
 
 
 prompt = """
@@ -128,8 +171,10 @@ def flatten_dict(d, sep='_'):
 def main():
     #load_dotenv()
     #st.set_page_config(page_title = "Receipt Invoice OCR", page_icon = ":camera")
+    
 
     
+
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
         
@@ -145,7 +190,7 @@ def main():
     ct = st.container()
 
     col1,col2=ct.columns(2)
-    with st.sidebar:
+    with ct:
         st.subheader("Your documents")
         pdf_docs = st.file_uploader("Upload your PDFs here and click on 'Process'", accept_multiple_files = False)
         if pdf_docs:
@@ -169,7 +214,7 @@ def main():
                         ct.write(response)
                         ct.error('Error occured...')
                     
-                    csvresp = gpt_response(b64_image,prompt="write me the Date,Amount,Check Number,Description if you find them (in JSON format) in this exactly this format {invoices : ['Date': '' , 'Amount':'','Check Number' :'', 'Description':'']}  !VERY IMPORTANT : DO NOT WRITE ANY TEXT RATEHR THAN THE JSON FORMAT! ")
+                    csvresp = gpt_response(b64_image,prompt="write me the [Date,Amount,Vendor,Expense Type] if you find them (in JSON format) in this exactly this format {invoices : ['Date': '' , 'Amount':'','Vendor' :'', 'Expense Type':'']}. The Expense Type should be adapted to quickbooks !VERY IMPORTANT : DO NOT WRITE ANY TEXT RATEHR THAN THE JSON FORMAT! ")
                 
                     try:
                         csvans = csvresp['choices'][0]['message']['content']
@@ -193,7 +238,7 @@ def main():
                         ct.write(classification)
 
                         conv = conversation_chain(vector_store)
-                        csvresp=  conv({"question": "write me the Date,Amount,Check Number,Description if you find them (in JSON format) in this format '''{invoices : ['Date': '' , 'Amount':'','Check Number' :'', 'Description':'']}'''"})                        
+                        csvresp=  conv({"question": "write me the Date,Amount,Vendor,Expense Type if you find them (in JSON format) in this format '''{invoices : ['Date': '' , 'Amount':'','Vendor' :'', 'Expense Type':'']}. The Expense Type should be adapted to quickbooks '''"})                        
                         try:
                             csvans = json.loads(csvresp["answer"])
                             st.session_state.csvans = csvans
@@ -215,13 +260,18 @@ def main():
 
                     except Exception as e :
                         st.write(e)
-                        ct.write(csvresp)
-                        ct.write(resp)
+                        #ct.write(csvresp)
+                        #ct.write(resp)
                         ct.error('Error occured...')
 
     @st.cache_data
     def convert_df(df):
         return df.to_csv(index=False).encode()
+    
+    def load_csv_from_github(url):
+        response = requests.get(url)
+        return pd.read_csv(StringIO(response.text))
+
 
     dfc = st.container()
     if st.session_state.csvans:
@@ -235,17 +285,28 @@ def main():
         save = ct.button('save')
         if save: 
             with st.spinner("Processing"):
-                excel_file_path = "Bank Upload CSV QBO.csv"
-                exisiting_df = pd.read_csv(excel_file_path)
-                new_df = pd.concat([exisiting_df, df], ignore_index=True)
+                excel_file_path="Bank+Upload+CSV+QBO+(2).csv"
+                bucket_name = 'receiptscanners3'
+                file_name = 'Bank Upload CSV QBO (2).csv'
+                csv_data = download_file_from_s3(bucket_name, file_name)
+                # Load into pandas, edit as needed
+                awsdf = pd.read_csv(StringIO(csv_data))
+                new_df = pd.concat([awsdf, df], ignore_index=True)
+                csv_buffer = StringIO()
+                new_df.to_csv(csv_buffer, index=False)
+                csv_buffer.seek(0)
+                
+                dfc.write('Updated file : ')
                 dfc.dataframe(new_df)
-                csv = convert_df(new_df)
+                upload_file_to_s3(bucket_name, file_name, csv_buffer.getvalue())
+
                 ct.success('File saved ')
+                csv = convert_df(new_df)
                 ct.download_button(
-                    label="Download data as CSV",
-                    data=csv,
-                    file_name=excel_file_path,
-                    mime='text/csv',
+                   label="Download data as CSV",
+                   data=csv,
+                   file_name=excel_file_path,
+                   mime='text/csv',
                 )
 
 
